@@ -83,9 +83,9 @@ def set_seed(seed):
 def train(config):
     set_seed(config.get("seed", 42))
 
-    wandb.login(key='fa09a72f9dc3063f756c3f60300c431ca19d7218')
-    wandb.init(project='ravikumarshah-vebuin/minitron-donut', name=config.exp_name + '_' + config.exp_version)
-    weave.init(project_name='ravikumarshah-vebuin/minitron-donut')
+    wandb.login(key='621ccf4fd73b1f3e9057ed69cbdd37ea2f18dd84')
+    wandb.init(project='donut-vista-finetuning', name=config.exp_name + '_' + config.exp_version)
+    weave.init(project_name='donut-vista-finetuning')
 
     model_module = DonutModelPLModule(config)
     data_module = DonutDataPLModule(config)
@@ -140,16 +140,16 @@ def train(config):
     checkpoint_callback = ModelCheckpoint(
         monitor="val_metric",
         dirpath=Path(config.result_path) / config.exp_name / config.exp_version,
-        filename="artifacts",
-        save_top_k=1,
-        save_last=False,
+        filename="epoch-{epoch:02d}-{val_metric:.4f}",
+        save_top_k=-1,
+        save_last=True,
         mode="min",
     )
 
     early_stop_callback = EarlyStopping(
         monitor="val_metric",
         mode="min",
-        patience=10,  # stop if no improvement for 10 validations
+        patience=200,  # stop if no improvement for 10 validations
         stopping_threshold=0.001,  # stop when ED < 0.001
     )
 

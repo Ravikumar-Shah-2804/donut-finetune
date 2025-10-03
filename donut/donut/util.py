@@ -6,6 +6,8 @@ MIT License
 import json
 import os
 import random
+import sys
+import time
 from collections import defaultdict
 from typing import Any, Dict, List, Tuple, Union
 
@@ -40,6 +42,7 @@ class DonutDataset(Dataset):
         task_start_token: the special token to be fed to the decoder to conduct the target task
     """
 
+
     def __init__(
         self,
         dataset_name_or_path: str,
@@ -52,6 +55,8 @@ class DonutDataset(Dataset):
         sort_json_key: bool = True,
     ):
         super().__init__()
+        print("Starting dataset loading...")
+        sys.stdout.flush()
 
         self.donut_model = donut_model
         self.max_length = max_length
@@ -62,30 +67,74 @@ class DonutDataset(Dataset):
         self.sort_json_key = sort_json_key
 
         self.dataset = load_dataset(dataset_name_or_path, split=self.split)
-        self.dataset_length = len(self.dataset)
+        print(f"Dataset length before processing: {len(self.dataset)}")
+        if len(self.dataset) > 0:
+            first_sample = self.dataset[0]
+            print(f"First sample keys: {list(first_sample.keys())}")
+            print(f"First sample ground_truth: {first_sample.get('ground_truth', 'N/A')}")
 
+
+
+        self.valid_indices = []
         self.gt_token_sequences = []
-        for sample in self.dataset:
-            ground_truth = json.loads(sample["ground_truth"])
-            if "gt_parses" in ground_truth:  # when multiple ground truths are available, e.g., docvqa
-                assert isinstance(ground_truth["gt_parses"], list)
-                gt_jsons = ground_truth["gt_parses"]
-            else:
-                assert "gt_parse" in ground_truth and isinstance(ground_truth["gt_parse"], dict)
-                gt_jsons = [ground_truth["gt_parse"]]
+        self.image_times = []
+        self.text_times = []
+        self.sample_count = 0
+        for idx in range(len(self.dataset)):
+            try:
+                sample = self.dataset[idx]
+            except Exception as e:
+                print(f"Error loading sample {idx}: {e}")
+                continue
+            try:
+                # Check if image is loaded
+                start_time = time.time()
+                _ = sample["image"]
+                image_time = time.time() - start_time
+                start_time = time.time()
+                ground_truth = json.loads(sample["ground_truth"])
+                if "gt_parses" in ground_truth:  # when multiple ground truths are available, e.g., docvqa
+                    assert isinstance(ground_truth["gt_parses"], list)
+                    gt_jsons = ground_truth["gt_parses"]
+                else:
+                    assert "gt_parse" in ground_truth and isinstance(ground_truth["gt_parse"], dict)
+                    gt_jsons = [ground_truth["gt_parse"]]
 
-            self.gt_token_sequences.append(
-                [
-                    task_start_token
-                    + self.donut_model.json2token(
-                        gt_json,
-                        update_special_tokens_for_json_key=self.split == "train",
-                        sort_json_key=self.sort_json_key,
-                    )
-                    + self.donut_model.decoder.tokenizer.eos_token
-                    for gt_json in gt_jsons  # load json from list of json
-                ]
-            )
+                self.gt_token_sequences.append(
+                    [
+                        task_start_token
+                        + self.donut_model.json2token(
+                            gt_json,
+                            update_special_tokens_for_json_key=False,
+                            sort_json_key=self.sort_json_key,
+                        )
+                        + self.donut_model.decoder.tokenizer.eos_token
+                        for gt_json in gt_jsons  # load json from list of json
+                    ]
+                )
+                text_time = time.time() - start_time
+                self.image_times.append(image_time)
+                self.text_times.append(text_time)
+                self.valid_indices.append(idx)
+            except Exception as e:
+                print(f"Error processing sample {idx}: {e}")
+                continue
+            if (idx + 1) % 50 == 0:
+                print(f"Processed {idx + 1}/{len(self.dataset)} samples")
+                if len(self.image_times) >= 50:
+                    avg_image = sum(self.image_times[-50:]) / 50
+                    avg_text = sum(self.text_times[-50:]) / 50
+                    print(f"Average image processing time (last 50 samples): {avg_image:.4f}s")
+                    print(f"Average text processing time (last 50 samples): {avg_text:.4f}s")
+                sys.stdout.flush()
+
+        print("Dataset processing completed.")
+        sys.stdout.flush()
+
+        self.dataset_length = len(self.valid_indices)
+
+        self.image_times = []
+        self.text_times = []
 
         self.donut_model.decoder.add_special_tokens([self.task_start_token, self.prompt_end_token])
         self.prompt_end_token_id = self.donut_model.decoder.tokenizer.convert_tokens_to_ids(self.prompt_end_token)
@@ -103,10 +152,14 @@ class DonutDataset(Dataset):
             input_ids : tokenized gt_data
             labels : masked labels (model doesn't need to predict prompt and pad token)
         """
-        sample = self.dataset[idx]
+        sample = self.dataset[self.valid_indices[idx]]
 
         # input_tensor
-        input_tensor = self.donut_model.encoder.prepare_input(sample["image"], random_padding=self.split == "train")
+        try:
+            input_tensor = self.donut_model.encoder.prepare_input(sample["image"], random_padding=self.split == "train")
+        except OSError as e:
+            print(f"OSError loading image for idx {idx}: {e}")
+            return None
 
         # input_ids
         processed_parse = random.choice(self.gt_token_sequences[idx])  # can be more than one, e.g., DocVQA Task 1

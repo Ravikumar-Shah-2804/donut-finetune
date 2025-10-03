@@ -1,6 +1,14 @@
 vista-dat/
+donut_test/
+production-data/
+result/
+wandb/
+cache/
+config/
 model/
 env/
+lightning_logs/
+prebuilt_vocab/
 venv/
 # Python
 __pycache__/
